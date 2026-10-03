@@ -186,14 +186,14 @@ jobs:
       - name: Check if it runs
         run: |
           lscpu
+          cat /proc/sys/kernel/core_pattern
+          ulimit -c unlimited
           ${INSTALL_PREFIX}/bin/darktable --version || true
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
             export XDG_CONFIG_HOME="/tmp/darktable-config-$attempt"
             export XDG_CACHE_HOME="/tmp/darktable-cache-$attempt"
-            gdb --batch --return-child-result \
-                   -ex run -ex 'thread apply all bt full' \
-                   -ex 'python if gdb.selected_thread(): gdb.execute("x/16i $pc")' \
-                   --args ${INSTALL_PREFIX}/bin/darktable-cli \
+            status=0
+            ${INSTALL_PREFIX}/bin/darktable-cli \
                    --width 1000 --height 1000 \
                    --hq true --apply-custom-presets false \
                    "${SRC_DIR}/data/pixmaps/256x256/darktable.png" \
@@ -201,5 +201,13 @@ jobs:
                    --core --disable-opencl --conf host_memory_limit=8192 \
                    --conf worker_threads=4 -t 4 \
                    --conf plugins/lighttable/export/force_lcms2=FALSE \
-                   --conf plugins/lighttable/export/iccintent=0
+                   --conf plugins/lighttable/export/iccintent=0 || status=$?
+            if [ "$status" -ne 0 ]; then
+              for core in core core.*; do
+                [ -f "$core" ] || continue
+                gdb --batch -ex 'thread apply all bt full' -ex 'x/16i $pc' \
+                  -ex 'info registers' "${INSTALL_PREFIX}/bin/darktable-cli" "$core"
+              done
+              exit "$status"
+            fi
           done
