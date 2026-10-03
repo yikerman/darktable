@@ -205,8 +205,12 @@ jobs:
           ./src/.ci/ci-script.sh;
       - name: Check if it runs
         run: |
+          lscpu
           ${INSTALL_PREFIX}/bin/darktable --version || true
-          ${INSTALL_PREFIX}/bin/darktable-cli \
+          gdb --batch --return-child-result \
+                 -ex run -ex 'thread apply all bt full' \
+                 -ex 'python if gdb.selected_thread(): gdb.execute("x/16i $pc")' \
+                 --args ${INSTALL_PREFIX}/bin/darktable-cli \
                  --width 1000 --height 1000 \
                  --hq true --apply-custom-presets false \
                  "${SRC_DIR}/data/pixmaps/256x256/darktable.png" \
