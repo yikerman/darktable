@@ -49,11 +49,11 @@ jobs:
 
   Linux:
     if: github.repository == 'darktable-org/darktable' || github.event_name == 'workflow_dispatch'
-    name: Linux_${{ matrix.distro }}_${{ matrix.compiler.compiler }}_${{ matrix.btype }}_${{ matrix.replica }}
+    name: Linux_${{ matrix.distro }}_${{ matrix.compiler.compiler }}_${{ matrix.btype }}_${{ matrix.source_ref }}
     runs-on: ubuntu-latest
     container:
       image: ${{ matrix.distro }}
-      options: --tmpfs /tmp:exec --tmpfs /__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}:exec
+      options: --tmpfs /tmp:exec --tmpfs /__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}:exec -v /var/lib/systemd/coredump:/var/lib/systemd/coredump:ro -v /run/log/journal:/run/log/journal:ro -v /var/log/journal:/var/log/journal:ro
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +68,7 @@ jobs:
         generator:
           - Ninja
         eco: [-DDONT_USE_INTERNAL_LIBRAW=ON]
-        replica: [1, 2]
+        source_ref: [9c9ff7e833b6bd06df2c4f22ddaa9d5c816abc39, 8bc82cd1185dd5ae1f3a75771f7577bbfbfeb0d8]
     env:
       DISTRO: ${{ matrix.distro }}
       CC: ${{ matrix.compiler.CC }}
@@ -112,6 +112,7 @@ jobs:
             gettext \
             git \
             gdb \
+            systemd-coredump \
             intltool \
             libarchive-dev \
             libatk1.0-dev \
@@ -168,6 +169,7 @@ jobs:
             zlib1g-dev;
       - uses: actions/checkout@v7
         with:
+          ref: ${{ matrix.source_ref }}
           submodules: false
           path: src
           fetch-depth: 1
@@ -203,6 +205,7 @@ jobs:
                    --conf plugins/lighttable/export/force_lcms2=FALSE \
                    --conf plugins/lighttable/export/iccintent=0 || status=$?
             if [ "$status" -ne 0 ]; then
+              coredumpctl --no-pager --output=core dump COREDUMP_COMM=darktable-cli || true
               for core in core core.*; do
                 [ -f "$core" ] || continue
                 gdb --batch -ex 'thread apply all bt full' -ex 'x/16i $pc' \
