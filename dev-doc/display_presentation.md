@@ -176,6 +176,17 @@ Code is split by what it works around:
   or later, never earlier. `present()` may refuse while the compositor holds
   its buffers; the layers are then composed and presented again next frame.
 
+### macOS
+
+`gui/presenter_macos.mm`, built for the GTK Quartz backend. Core Animation
+layers above GTK's view carry the image in extended-linear BT.2020 and the
+foreground in sRGB. Core Animation converts both to the current screen
+profile. The image layer requests EDR; darktable uses the screen's maximum
+potential EDR headroom, rounded to 1/8 EV, so changes to the live EDR value
+do not repeatedly reprocess the image. Core Animation limits the result to
+the headroom currently available to the display. If the Quartz view or its
+backing layer is unavailable, the window stays on cairo.
+
 ### Wayland
 
 `gui/presenter_wayland.c`, built with `USE_WAYLAND`. It needs
@@ -199,8 +210,8 @@ Each lives in one file and goes away with the limitation it works around.
 | Workaround | Where | Works around | Removed when |
 |---|---|---|---|
 | image and foreground layers above GTK's surface | `presenter_layers.c` | GTK3 cannot give a widget a surface with a color state | GTK4: the image is a texture with a color state |
-| `gtk_widget_draw()` replay of GtkOverlay children stacked above a presenting widget into the foreground | `presenter_layers.c`, `_replay_overlays()` | the layers cover GTK's drawing of those widgets (toasts, masks panel, second window buttons); where GTK3 draws popovers into the toplevel (Quartz, Win32), popovers need the same | same |
-| composing and presenting in the frame clock's `paint` signal, after GDK's handler | `presenter_wayland.c`, `_paint()` | GTK3 runs all draws in `paint` and GDK commits its surface in `after-paint`; the layers must be ready in between | same |
+| `gtk_widget_draw()` replay of GtkOverlay children stacked above a presenting widget into the foreground, refreshed on child redraws | `presenter_layers.c`, `_replay_overlays()` and overlay draw watches | the layers cover GTK's drawing of those widgets (toasts, masks panel, second window buttons); where GTK3 draws popovers into the toplevel (Quartz, Win32), popovers need the same | same |
+| composing and presenting in the frame clock's `paint` signal, after GDK's handler | `presenter_wayland.c` and `presenter_macos.mm`, `_paint()` | GTK3 runs all draws in `paint` and GDK commits its surface in `after-paint`; the layers must be ready in between | same |
 | GTK's surface declared sRGB | `presenter_wayland.c`, `_set_output()` and `dt_presenter_wayland_new()` | GTK3 does not tag its surface, and an untagged surface is sRGB to the compositor | GTK tags its surfaces |
 | no opaque region on the layers | `presenter_wayland.c`, `_layer_init()` | a compositor may stop frame callbacks for a surface it considers occluded, which stops GTK's frame clock | GTK4 |
 | layers and surface feedback recreated when GDK's surface changes | `presenter_wayland.c`, `_toplevel_unmap()` and `_present()` | GDK destroys its `wl_surface` when a window is hidden and makes a new one when it is shown again | GTK4 |

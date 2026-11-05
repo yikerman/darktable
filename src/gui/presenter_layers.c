@@ -64,6 +64,8 @@ struct dt_presenter_layered_t
   GArray *images;
   // what the image layer holds
   GArray *shown;
+  GHashTable *overlay_widgets;
+  gboolean replaying_overlays;
   int shown_width, shown_height, shown_scale;
   float *image;
   // drawn and not presented yet
@@ -71,9 +73,169 @@ struct dt_presenter_layered_t
   void *backend_data;
 };
 
+typedef struct _overlay_widget_t
+{
+  GtkWidget *widget;
+  gulong draw_handler;
+  gulong add_handler;
+  gulong remove_handler;
+  gulong destroy_handler;
+  gboolean overlay_parent;
+} _overlay_widget_t;
+
+static void _overlay_watch_tree(dt_presenter_layered_t *l,
+                                GtkWidget *widget);
+static void _overlay_unwatch_tree(dt_presenter_layered_t *l,
+                                  GtkWidget *widget);
+
+static void _overlay_add(GtkContainer *container,
+                         GtkWidget *child,
+                         dt_presenter_layered_t *l)
+{
+  const _overlay_widget_t *watch = g_hash_table_lookup(l->overlay_widgets, container);
+  if(!watch || !watch->overlay_parent
+     || child != gtk_bin_get_child(GTK_BIN(container)))
+    _overlay_watch_tree(l, child);
+}
+
+static void _overlay_remove(GtkContainer *container,
+                            GtkWidget *child,
+                            dt_presenter_layered_t *l)
+{
+  const _overlay_widget_t *watch = g_hash_table_lookup(l->overlay_widgets, container);
+  if(!watch || !watch->overlay_parent
+     || child != gtk_bin_get_child(GTK_BIN(container)))
+    _overlay_unwatch_tree(l, child);
+}
+
+static void _overlay_destroy(GtkWidget *widget,
+                             dt_presenter_layered_t *l)
+{
+  _overlay_unwatch_tree(l, widget);
+}
+
+static gboolean _overlay_draw(GtkWidget *widget,
+                              cairo_t *cr,
+                              dt_presenter_layered_t *l)
+{
+  if(!l->replaying_overlays && l->images->len && !l->pending)
+  {
+    l->pending = TRUE;
+    if(l->window->backend->drawn)
+      l->window->backend->drawn(l->window->backend);
+  }
+  (void)widget;
+  (void)cr;
+  return FALSE;
+}
+
+static void _overlay_watch_widget(dt_presenter_layered_t *l,
+                                  GtkWidget *widget,
+                                  const gboolean overlay_parent)
+{
+  _overlay_widget_t *watch = g_hash_table_lookup(l->overlay_widgets, widget);
+  if(watch)
+  {
+    if(overlay_parent) watch->overlay_parent = TRUE;
+    return;
+  }
+
+  watch = g_malloc0(sizeof(_overlay_widget_t));
+  watch->widget = widget;
+  watch->overlay_parent = overlay_parent;
+  watch->draw_handler = g_signal_connect_after(widget, "draw",
+                                                G_CALLBACK(_overlay_draw), l);
+  watch->destroy_handler =
+    g_signal_connect_data(widget, "destroy", G_CALLBACK(_overlay_destroy), l,
+                          NULL, (GConnectFlags)0);
+  if(GTK_IS_CONTAINER(widget))
+  {
+    watch->add_handler =
+      g_signal_connect_data(widget, "add", G_CALLBACK(_overlay_add), l,
+                            NULL, (GConnectFlags)0);
+    watch->remove_handler =
+      g_signal_connect_data(widget, "remove", G_CALLBACK(_overlay_remove), l,
+                            NULL, (GConnectFlags)0);
+  }
+  g_hash_table_insert(l->overlay_widgets, widget, watch);
+}
+
+static void _overlay_watch_tree(dt_presenter_layered_t *l,
+                                GtkWidget *widget)
+{
+  if(g_hash_table_contains(l->overlay_widgets, widget)) return;
+  _overlay_watch_widget(l, widget, FALSE);
+  if(GTK_IS_CONTAINER(widget))
+  {
+    GList *children = gtk_container_get_children(GTK_CONTAINER(widget));
+    for(GList *c = children; c; c = g_list_next(c))
+      _overlay_watch_tree(l, c->data);
+    g_list_free(children);
+  }
+}
+
+static void _overlay_unwatch_tree(dt_presenter_layered_t *l,
+                                  GtkWidget *widget)
+{
+  _overlay_widget_t *watch = g_hash_table_lookup(l->overlay_widgets, widget);
+  if(!watch) return;
+  if(GTK_IS_CONTAINER(widget))
+  {
+    GList *children = gtk_container_get_children(GTK_CONTAINER(widget));
+    for(GList *c = children; c; c = g_list_next(c))
+      _overlay_unwatch_tree(l, c->data);
+    g_list_free(children);
+  }
+  if(watch->draw_handler) g_signal_handler_disconnect(widget, watch->draw_handler);
+  if(watch->add_handler) g_signal_handler_disconnect(widget, watch->add_handler);
+  if(watch->remove_handler) g_signal_handler_disconnect(widget, watch->remove_handler);
+  if(watch->destroy_handler)
+    g_signal_handler_disconnect(widget, watch->destroy_handler);
+  g_hash_table_remove(l->overlay_widgets, widget);
+}
+
+static void _overlay_watch_parent(dt_presenter_layered_t *l,
+                                  GtkWidget *widget)
+{
+  if(!GTK_IS_OVERLAY(widget)) return;
+  if(g_hash_table_contains(l->overlay_widgets, widget))
+  {
+    _overlay_widget_t *watch = g_hash_table_lookup(l->overlay_widgets, widget);
+    watch->overlay_parent = TRUE;
+    return;
+  }
+
+  _overlay_watch_widget(l, widget, TRUE);
+  GtkWidget *main_child = gtk_bin_get_child(GTK_BIN(widget));
+  GList *children = gtk_container_get_children(GTK_CONTAINER(widget));
+  for(GList *c = children; c; c = g_list_next(c))
+    if(c->data != main_child) _overlay_watch_tree(l, c->data);
+  g_list_free(children);
+}
+
+static void _overlay_watch_ancestors(dt_presenter_layered_t *l)
+{
+  GtkWidget *child = l->widget;
+  for(GtkWidget *parent = gtk_widget_get_parent(child);
+      parent;
+      child = parent, parent = gtk_widget_get_parent(parent))
+  {
+    if(GTK_IS_OVERLAY(parent)) _overlay_watch_parent(l, parent);
+  }
+}
+
 static void _layered_free(dt_presenter_layered_t *l)
 {
   if(l->backend_data) l->window->backend->release(l->window->backend, &l->backend_data);
+  while(g_hash_table_size(l->overlay_widgets))
+  {
+    GHashTableIter iter;
+    gpointer widget;
+    g_hash_table_iter_init(&iter, l->overlay_widgets);
+    if(g_hash_table_iter_next(&iter, &widget, NULL))
+      _overlay_unwatch_tree(l, widget);
+  }
+  g_hash_table_destroy(l->overlay_widgets);
   g_signal_handler_disconnect(l->widget, l->destroy_handler);
   if(l->cr) cairo_destroy(l->cr);
   if(l->foreground) cairo_surface_destroy(l->foreground);
@@ -139,6 +301,9 @@ static dt_presenter_window_t *_window_get(GtkWidget *widget)
 #ifdef HAVE_WAYLAND
   w->backend = dt_presenter_wayland_new(toplevel, w);
 #endif
+#ifdef HAVE_MACOS_PRESENTER
+  if(!w->backend) w->backend = dt_presenter_macos_new(toplevel, w);
+#endif
   return w;
 }
 
@@ -175,9 +340,12 @@ dt_presenter_layered_t *dt_presenter_layered_get(GtkWidget *widget,
   l->window = w;
   l->images = g_array_new(FALSE, FALSE, sizeof(dt_presenter_image_t));
   l->shown = g_array_new(FALSE, FALSE, sizeof(_shown_t));
+  l->overlay_widgets = g_hash_table_new_full(g_direct_hash, g_direct_equal,
+                                             NULL, g_free);
   l->destroy_handler =
     g_signal_connect_data(widget, "destroy", G_CALLBACK(_widget_destroy), l, NULL, 0);
   w->widgets = g_list_prepend(w->widgets, l);
+  _overlay_watch_ancestors(l);
   return l;
 }
 
@@ -193,6 +361,7 @@ gboolean dt_presenter_declared_output(GtkWidget *widget,
 
 cairo_t *dt_presenter_layered_begin(dt_presenter_layered_t *l)
 {
+  _overlay_watch_ancestors(l);
   const int width = gtk_widget_get_allocated_width(l->widget);
   const int height = gtk_widget_get_allocated_height(l->widget);
   const int scale = gtk_widget_get_scale_factor(l->widget);
@@ -385,6 +554,8 @@ static gboolean _image_changed(const dt_presenter_layered_t *l,
 // are the layers' own content
 static void _replay_overlays(dt_presenter_layered_t *l)
 {
+  const gboolean replaying = l->replaying_overlays;
+  l->replaying_overlays = TRUE;
   GtkWidget *child = l->widget;
   for(GtkWidget *parent = gtk_widget_get_parent(child);
       parent;
@@ -414,6 +585,7 @@ static void _replay_overlays(dt_presenter_layered_t *l)
     }
     g_list_free(children);
   }
+  l->replaying_overlays = replaying;
 }
 
 static void _present(dt_presenter_layered_t *l)

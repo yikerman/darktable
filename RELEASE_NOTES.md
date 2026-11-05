@@ -135,6 +135,11 @@ changes (where available).
   double conversion. Other compositors and platforms keep the display
   path they had.
 
+- Wide gamut and HDR display on macOS. The darkroom image, snapshots,
+  second window and slideshow use Core Animation EDR layers in extended
+  linear Rec. 2020. The system converts them to the current display profile
+  and limits highlights to the available display headroom.
+
 ## UI/UX Improvements
 
 - The code has received a large set of changes in preparation of the

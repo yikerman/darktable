@@ -101,6 +101,8 @@ struct dt_presenter_backend_t
 
 typedef struct dt_presenter_window_t dt_presenter_window_t;
 
+G_BEGIN_DECLS
+
 /** for backends, and for a setup that leaves the window on cairo: declare
  * the window's output and what GTK's own surface there is shown in, or
  * give both back with NULL; redraws the window */
@@ -120,6 +122,15 @@ void dt_presenter_window_present(dt_presenter_window_t *window);
 dt_presenter_backend_t *dt_presenter_wayland_new(GtkWidget *toplevel,
                                                  dt_presenter_window_t *window);
 #endif
+
+#ifdef HAVE_MACOS_PRESENTER
+/** the Core Animation backend for a Quartz toplevel, or NULL if it cannot
+ * attach to the window */
+dt_presenter_backend_t *dt_presenter_macos_new(GtkWidget *toplevel,
+                                               dt_presenter_window_t *window);
+#endif
+
+G_END_DECLS
 
 /* for presenter.c */
 
